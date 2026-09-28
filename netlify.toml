@@ -1,0 +1,23 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# Admin SPA — serve admin.html for /admin path
+[[redirects]]
+  from = "/admin"
+  to = "/admin.html"
+  status = 200
+
+[[redirects]]
+  from = "/admin/*"
+  to = "/admin.html"
+  status = 200
+
+# Public form — serve index.html for root
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

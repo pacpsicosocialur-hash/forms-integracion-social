@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <meta name="description" content="Formulario de recolección de información para el Programa de Reinserción Socio-Laboral de Clínica Día — Terapia Ocupacional.">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Formulario — Programa de Terapia Ocupacional</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+</head>
+<body>
+
+  <!-- Loading Overlay -->
+  <div class="loading-overlay" id="loadingOverlay" style="display:none" role="status" aria-live="polite">
+    <div class="spinner" aria-hidden="true"></div>
+    <p id="loadingMessage">Cargando...</p>
+  </div>
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toastContainer" aria-live="assertive" aria-atomic="true"></div>
+
+  <!-- Main App -->
+  <div id="app">
+
+    <!-- Header fijo -->
+    <header class="form-header" role="banner">
+      <h1 class="form-header-title" id="formTitle">
+        PROGRAMA DE REINSERCIÓN SOCIO-LABORAL DE CLÍNICA DÍA
+      </h1>
+      <p class="form-header-subtitle" id="formSubtitle">
+        Programa de Terapia Ocupacional para la inclusión social de personas con diagnóstico psicosocial
+      </p>
+    </header>
+
+    <!-- Barra de progreso -->
+    <nav class="progress-container" role="navigation" aria-label="Progreso del formulario">
+      <div class="progress-steps" role="list">
+        <!-- Paso 0: Consentimiento -->
+        <div class="progress-step is-active" role="listitem" aria-label="Paso 1: Consentimiento">
+          <div class="step-dot" aria-hidden="true">1</div>
+          <span class="step-label">Consentimiento</span>
+        </div>
+        <!-- Paso 1: Datos generales -->
+        <div class="progress-step" role="listitem" aria-label="Paso 2: Datos generales">
+          <div class="step-dot" aria-hidden="true">2</div>
+          <span class="step-label">Datos generales</span>
+        </div>
+        <!-- Paso 2: Desempeño -->
+        <div class="progress-step" role="listitem" aria-label="Paso 3: Desempeño ocupacional">
+          <div class="step-dot" aria-hidden="true">3</div>
+          <span class="step-label">Desempeño</span>
+        </div>
+        <!-- Paso 3: Habilidades laborales -->
+        <div class="progress-step" role="listitem" aria-label="Paso 4: Habilidades laborales">
+          <div class="step-dot" aria-hidden="true">4</div>
+          <span class="step-label">Habilidades</span>
+        </div>
+        <!-- Paso 4: Interacción social -->
+        <div class="progress-step" role="listitem" aria-label="Paso 5: Interacción social">
+          <div class="step-dot" aria-hidden="true">5</div>
+          <span class="step-label">Social</span>
+        </div>
+        <!-- Paso 5: Barreras y apoyos -->
+        <div class="progress-step" role="listitem" aria-label="Paso 6: Barreras y apoyos">
+          <div class="step-dot" aria-hidden="true">6</div>
+          <span class="step-label">Barreras</span>
+        </div>
+        <!-- Paso 6: Intereses -->
+        <div class="progress-step" role="listitem" aria-label="Paso 7: Intereses laborales">
+          <div class="step-dot" aria-hidden="true">7</div>
+          <span class="step-label">Intereses</span>
+        </div>
+        <!-- Paso 7: Finalización -->
+        <div class="progress-step" role="listitem" aria-label="Paso 8: Finalización">
+          <div class="step-dot" aria-hidden="true">✓</div>
+          <span class="step-label">Finalización</span>
+        </div>
+      </div>
+
+      <div class="progress-bar-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div class="progress-bar-fill" id="progressFill" style="width:0%"></div>
+      </div>
+    </nav>
+
+    <!-- Contenedor principal -->
+    <main class="form-container" id="formContainer" role="main">
+
+      <!-- PASO 0: Consentimiento + Firma -->
+      <section class="form-section is-active" id="step-consent"
+               aria-labelledby="step-consent-title" aria-live="polite">
+        <!-- Renderizado dinámicamente por form.js -->
+      </section>
+
+      <!-- PASO 1: Datos Generales -->
+      <section class="form-section" id="step-general"
+               aria-labelledby="step-general-title" aria-live="polite">
+        <!-- Renderizado dinámicamente por form.js -->
+      </section>
+
+      <!-- PASO 2: Desempeño Ocupacional -->
+      <section class="form-section" id="step-occupational"
+               aria-labelledby="step-occupational-title" aria-live="polite">
+        <!-- Renderizado dinámicamente por form.js -->
+      </section>
+
+      <!-- PASO 3: Habilidades Laborales -->
+      <section class="form-section" id="step-work_skills"
+               aria-labelledby="step-workskills-title" aria-live="polite">
+        <!-- Renderizado dinámicamente por form.js -->
+      </section>
+
+      <!-- PASO 4: Interacción Social -->
+      <section class="form-section" id="step-social"
+               aria-labelledby="step-social-title" aria-live="polite">
+        <!-- Renderizado dinámicamente por form.js -->
+      </section>
+
+      <!-- PASO 5: Barreras y Apoyos -->
+      <section class="form-section" id="step-barriers"
+               aria-labelledby="step-barriers-title" aria-live="polite">
+        <!-- Renderizado dinámicamente por form.js -->
+      </section>
+
+      <!-- PASO 6: Intereses Laborales -->
+      <section class="form-section" id="step-interests"
+               aria-labelledby="step-interests-title" aria-live="polite">
+        <!-- Renderizado dinámicamente por form.js -->
+      </section>
+
+      <!-- PASO 7: Finalización -->
+      <section class="form-section" id="step-completion"
+               aria-labelledby="step-completion-title" aria-live="polite">
+        <!-- Renderizado dinámicamente por form.js al completar -->
+      </section>
+
+      <!-- Navegación entre pasos -->
+      <nav class="form-navigation" id="formNavigation" role="navigation" aria-label="Navegación del formulario">
+        <button type="button" id="btnBack" class="btn btn-ghost btn-back"
+                aria-label="Volver al paso anterior" style="visibility:hidden">
+          ← Volver
+        </button>
+
+        <button type="button" id="btnNext" class="btn btn-primary btn-lg"
+                aria-label="Continuar al siguiente paso">
+          Continuar →
+        </button>
+      </nav>
+
+    </main>
+
+    <!-- Footer -->
+    <footer style="text-align:center;padding:2rem 1rem;font-size:0.75rem;color:var(--color-text-muted);border-top:1px solid var(--color-border)">
+      <p>Esta información es confidencial y se utilizará únicamente con fines académicos.</p>
+      <p style="margin-top:0.25rem">Programa de Terapia Ocupacional — Clínica Día</p>
+    </footer>
+
+  </div><!-- /#app -->
+
+  <script type="module" src="/src/pages/form/form.js"></script>
+</body>
+</html>
