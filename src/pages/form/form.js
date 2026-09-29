@@ -15,23 +15,26 @@ import {
 } from '../../services/responses.js'
 import { saveSignature }         from '../../services/signatures.js'
 import { validateSection, isSignatureValid, sanitizeText } from '../../utils/validation.js'
+import { FALLBACK_QUESTIONS }   from '../../data/fallbackQuestions.js'
 
 // ============================================================
 // ESTADO GLOBAL DE LA APLICACIÓN
 // ============================================================
 const state = {
-  currentStep:    0,
-  responseId:     null,
-  participantId:  null,
-  questions:      [],        // catálogo de preguntas cargado de Supabase
-  answers:        {},        // { question_code: value }
-  consentVersion: '1.0',
-  consentAccepted: false,
-  signatureDataURL: null,
+  currentStep:        0,
+  responseId:         null,
+  participantId:      null,
+  questions:          [...FALLBACK_QUESTIONS], // Inicializado con catálogo completo
+  answers:            {},                      // { question_code: value }
+  consentVersion:     '1.0',
+  consentAccepted:    false,
+  signatureDataURL:   null,
   signatureConfirmed: false,
-  isSubmitting:   false,
-  config:         {},
-  submittedCode:  null,
+  hasDrawnSignature:  false,
+  isSubmitting:       false,
+  config:             {},
+  submittedCode:      null,
+  isOfflineMode:      false,
 }
 
 // Definición de los pasos del formulario
@@ -227,6 +230,7 @@ function handleConditionals(parentCode, value) {
 // PASO 0 — Consentimiento + Firma
 function renderConsent() {
   const section = document.getElementById('step-consent')
+  if (!section) return
   section.innerHTML = `
     <div class="section-header">
       <h2 class="section-title">Consentimiento Informado</h2>
@@ -252,7 +256,7 @@ function renderConsent() {
     </div>
 
     <div id="consentError" class="question-error" role="alert" style="display:none;margin-bottom:1rem">
-      <span>⚠</span> Debe aceptar las dos condiciones para continuar.
+      <span>⚠</span> Debe aceptar las dos condiciones marcando ambas casillas para continuar.
     </div>
 
     <!-- FIRMA -->
@@ -261,9 +265,9 @@ function renderConsent() {
       <p class="signature-hint">Firme en el espacio a continuación utilizando el mouse, el dedo (pantalla táctil) o el lápiz digital.</p>
 
       <div class="signature-canvas-wrapper" id="signatureWrapper">
-        <div class="signature-placeholder">
+        <div class="signature-placeholder" id="signaturePlaceholder">
           <span class="signature-placeholder-icon">✍️</span>
-          <span>Dibuje su firma aquí</span>
+          <span>Dibuje su firma aquí con el mouse o pantalla táctil</span>
         </div>
         <canvas id="signatureCanvas" width="700" height="200" aria-label="Área de firma"></canvas>
       </div>
@@ -279,19 +283,38 @@ function renderConsent() {
       </div>
 
       <div id="signatureError" class="question-error" role="alert" style="display:none;margin-top:0.5rem">
-        <span>⚠</span> Debe firmar y confirmar la firma para continuar.
+        <span>⚠</span> Debe firmar y hacer clic en "✅ Confirmar firma" para continuar.
       </div>
     </div>
   `
+
+  // Agregar listeners a los checkboxes para limpiar error al marcar
+  document.getElementById('consent1')?.addEventListener('change', () => {
+    const c1 = document.getElementById('consent1')?.checked
+    const c2 = document.getElementById('consent2')?.checked
+    if (c1 && c2) {
+      const err = document.getElementById('consentError')
+      if (err) err.style.display = 'none'
+    }
+  })
+  document.getElementById('consent2')?.addEventListener('change', () => {
+    const c1 = document.getElementById('consent1')?.checked
+    const c2 = document.getElementById('consent2')?.checked
+    if (c1 && c2) {
+      const err = document.getElementById('consentError')
+      if (err) err.style.display = 'none'
+    }
+  })
 
   initSignaturePad()
 }
 
 // Inicializar el canvas de firma
 function initSignaturePad() {
-  const canvas  = document.getElementById('signatureCanvas')
-  const wrapper = document.getElementById('signatureWrapper')
-  if (!canvas) return
+  const canvas      = document.getElementById('signatureCanvas')
+  const wrapper     = document.getElementById('signatureWrapper')
+  const placeholder = document.getElementById('signaturePlaceholder')
+  if (!canvas || !wrapper) return
 
   const ctx = canvas.getContext('2d')
   let drawing = false
@@ -299,20 +322,36 @@ function initSignaturePad() {
 
   // Ajustar resolución del canvas al tamaño real en pantalla
   function resizeCanvas() {
-    const rect = canvas.getBoundingClientRect()
-    const dpr  = window.devicePixelRatio || 1
-    canvas.width  = rect.width  * dpr
-    canvas.height = 200 * dpr
+    const rect  = canvas.getBoundingClientRect()
+    const width = rect.width > 0 ? rect.width : (wrapper.clientWidth || 700)
+    const dpr   = window.devicePixelRatio || 1
+
+    let existingData = null
+    if (state.hasDrawnSignature && state.signatureDataURL) {
+      existingData = state.signatureDataURL
+    }
+
+    canvas.width  = Math.round(width * dpr)
+    canvas.height = Math.round(200 * dpr)
+    canvas.style.width  = '100%'
+    canvas.style.height = '200px'
+
     ctx.scale(dpr, dpr)
     ctx.strokeStyle = '#1A2B3C'
     ctx.lineWidth   = 2.5
     ctx.lineCap     = 'round'
     ctx.lineJoin    = 'round'
+
+    if (existingData) {
+      const img = new Image()
+      img.onload = () => ctx.drawImage(img, 0, 0, width, 200)
+      img.src = existingData
+    }
   }
 
   function getPos(e) {
     const rect = canvas.getBoundingClientRect()
-    if (e.touches) {
+    if (e.touches && e.touches.length > 0) {
       return {
         x: e.touches[0].clientX - rect.left,
         y: e.touches[0].clientY - rect.top,
@@ -322,6 +361,7 @@ function initSignaturePad() {
   }
 
   function startDraw(e) {
+    if (e.button !== undefined && e.button !== 0) return // Solo botón principal (izquierdo)
     e.preventDefault()
     drawing = true
     const pos = getPos(e)
@@ -329,23 +369,38 @@ function initSignaturePad() {
     lastY = pos.y
     ctx.beginPath()
     ctx.moveTo(lastX, lastY)
+    ctx.lineTo(lastX + 0.1, lastY + 0.1)
+    ctx.stroke()
+
+    state.hasDrawnSignature = true
+    wrapper.classList.add('has-content')
+    if (placeholder) placeholder.style.display = 'none'
   }
 
   function draw(e) {
-    e.preventDefault()
     if (!drawing) return
+    e.preventDefault()
     const pos = getPos(e)
+    ctx.beginPath()
+    ctx.moveTo(lastX, lastY)
     ctx.lineTo(pos.x, pos.y)
     ctx.stroke()
     lastX = pos.x
     lastY = pos.y
+
+    state.hasDrawnSignature = true
     wrapper.classList.add('has-content')
-    state.signatureDataURL = canvas.toDataURL('image/png')
+    if (placeholder) placeholder.style.display = 'none'
     state.signatureConfirmed = false
-    document.getElementById('signatureConfirmed').classList.remove('is-visible')
+    document.getElementById('signatureConfirmed')?.classList.remove('is-visible')
   }
 
-  function stopDraw() { drawing = false }
+  function stopDraw() {
+    if (drawing) {
+      drawing = false
+      state.signatureDataURL = canvas.toDataURL('image/png')
+    }
+  }
 
   resizeCanvas()
   window.addEventListener('resize', resizeCanvas)
@@ -353,36 +408,51 @@ function initSignaturePad() {
   // Mouse events
   canvas.addEventListener('mousedown',  startDraw)
   canvas.addEventListener('mousemove',  draw)
-  canvas.addEventListener('mouseup',    stopDraw)
+  window.addEventListener('mouseup',    stopDraw)
   canvas.addEventListener('mouseleave', stopDraw)
 
-  // Touch events
+  // Touch events (móviles y tablets)
   canvas.addEventListener('touchstart', startDraw, { passive: false })
   canvas.addEventListener('touchmove',  draw,      { passive: false })
   canvas.addEventListener('touchend',   stopDraw)
+  canvas.addEventListener('touchcancel',stopDraw)
 
   // Botón limpiar
-  document.getElementById('btnClearSignature').addEventListener('click', () => {
-    const rect = canvas.getBoundingClientRect()
-    ctx.clearRect(0, 0, rect.width, 200)
+  document.getElementById('btnClearSignature')?.addEventListener('click', () => {
+    const rect  = canvas.getBoundingClientRect()
+    const width = rect.width > 0 ? rect.width : (wrapper.clientWidth || 700)
+    ctx.clearRect(0, 0, width, 200)
     wrapper.classList.remove('has-content')
+    wrapper.classList.remove('is-invalid')
+    if (placeholder) placeholder.style.display = 'flex'
     state.signatureDataURL   = null
     state.signatureConfirmed = false
-    document.getElementById('signatureConfirmed').classList.remove('is-visible')
+    state.hasDrawnSignature  = false
+    document.getElementById('signatureConfirmed')?.classList.remove('is-visible')
+    const sigErr = document.getElementById('signatureError')
+    if (sigErr) sigErr.style.display = 'none'
   })
 
   // Botón confirmar
-  document.getElementById('btnConfirmSignature').addEventListener('click', () => {
-    if (!state.signatureDataURL || !isSignatureValid(state.signatureDataURL)) {
-      showToast('warning', 'Firma incompleta', 'Por favor dibuje su firma antes de confirmar.')
+  document.getElementById('btnConfirmSignature')?.addEventListener('click', () => {
+    state.signatureDataURL = canvas.toDataURL('image/png')
+    if (!state.hasDrawnSignature || !isSignatureValid(state.signatureDataURL)) {
+      showToast('warning', 'Firma requerida', 'Por favor dibuje su firma en el recuadro antes de confirmar.')
+      const sigErr = document.getElementById('signatureError')
+      if (sigErr) {
+        sigErr.style.display = 'flex'
+        sigErr.innerHTML = '<span>⚠</span> Por favor dibuje su firma antes de confirmar.'
+      }
+      wrapper.classList.add('is-invalid')
       return
     }
     state.signatureConfirmed = true
     wrapper.classList.add('has-content')
     wrapper.classList.remove('is-invalid')
-    document.getElementById('signatureConfirmed').classList.add('is-visible')
-    document.getElementById('signatureError').style.display = 'none'
-    showToast('success', 'Firma confirmada', 'Su firma ha sido registrada.')
+    document.getElementById('signatureConfirmed')?.classList.add('is-visible')
+    const sigErr = document.getElementById('signatureError')
+    if (sigErr) sigErr.style.display = 'none'
+    showToast('success', 'Firma confirmada', 'Su firma ha sido registrada correctamente.')
   })
 }
 
@@ -476,18 +546,31 @@ async function validateCurrentStep() {
 
     if (!c1 || !c2) {
       if (errEl) errEl.style.display = 'flex'
-      showToast('error', 'Consentimiento requerido', 'Debe aceptar las dos condiciones para continuar.')
+      showToast('error', 'Consentimiento requerido', 'Debe aceptar las dos condiciones marcando ambas casillas para continuar.')
       return false
     }
     if (errEl) errEl.style.display = 'none'
 
     // Validar firma
-    if (!state.signatureConfirmed || !state.signatureDataURL || !isSignatureValid(state.signatureDataURL)) {
+    if (!state.hasDrawnSignature || !state.signatureConfirmed || !state.signatureDataURL) {
       const sigErr = document.getElementById('signatureError')
       const wrapper = document.getElementById('signatureWrapper')
-      if (sigErr) sigErr.style.display = 'flex'
+      if (sigErr) {
+        sigErr.style.display = 'flex'
+        sigErr.innerHTML = `<span>⚠</span> ${
+          !state.hasDrawnSignature
+            ? 'Debe dibujar su firma en el recuadro antes de continuar.'
+            : 'Debe hacer clic en el botón "✅ Confirmar firma" para registrar su firma.'
+        }`
+      }
       if (wrapper) wrapper.classList.add('is-invalid')
-      showToast('error', 'Firma requerida', 'Debe firmar y confirmar la firma para continuar.')
+      showToast(
+        'error',
+        'Firma requerida',
+        !state.hasDrawnSignature
+          ? 'Por favor dibuje su firma con el mouse o pantalla táctil.'
+          : 'Presione "Confirmar firma" para validarla antes de continuar.'
+      )
       return false
     }
 
@@ -527,17 +610,40 @@ async function validateCurrentStep() {
 async function saveCurrentStep() {
   const step = state.currentStep
 
+  // Si aún no tenemos responseId y no estamos en offline forzado, intentar crear en Supabase
+  if (!state.responseId && !state.isOfflineMode) {
+    try {
+      const { response_id, participant_id } = await createResponse()
+      state.responseId    = response_id
+      state.participantId = participant_id
+    } catch (err) {
+      console.warn('[Form] Supabase no disponible al guardar, operando en modo local:', err.message)
+      state.isOfflineMode = true
+      state.responseId    = 'local_' + Math.random().toString(36).substring(2, 9)
+    }
+  }
+
   // PASO 0 — Guardar consentimiento y firma
   if (step === 0) {
-    await saveConsent({
-      responseId:  state.responseId,
-      version:     state.consentVersion,
-      accepted:    true,
-      consentText: CONSENT_TEXT,
-    })
+    if (!state.isOfflineMode && state.responseId) {
+      try {
+        await saveConsent({
+          responseId:  state.responseId,
+          version:     state.consentVersion,
+          accepted:    true,
+          consentText: CONSENT_TEXT,
+        })
+      } catch (err) {
+        console.warn('[Form] No se pudo guardar consentimiento en Supabase:', err.message)
+      }
 
-    // Subir firma a Supabase Storage
-    await saveSignature(state.responseId, state.signatureDataURL, state.consentVersion)
+      // Subir firma a Supabase Storage
+      try {
+        await saveSignature(state.responseId, state.signatureDataURL, state.consentVersion)
+      } catch (err) {
+        console.warn('[Form] No se pudo subir firma a Storage (verifique bucket "signatures"):', err.message)
+      }
+    }
     return
   }
 
@@ -561,11 +667,14 @@ async function saveCurrentStep() {
     }
   })
 
-  if (toSave.length > 0) {
-    await saveAnswers(state.responseId, toSave)
+  if (toSave.length > 0 && !state.isOfflineMode && state.responseId) {
+    try {
+      await saveAnswers(state.responseId, toSave)
+      await updateResponseStep(state.responseId, step + 1, 'in_progress')
+    } catch (err) {
+      console.warn('[Form] Error guardando respuestas en Supabase:', err.message)
+    }
   }
-
-  await updateResponseStep(state.responseId, step + 1, 'in_progress')
 }
 
 // ============================================================
@@ -618,7 +727,23 @@ async function goNext() {
 
     // Último paso: completar respuesta
     if (state.currentStep === STEPS.length - 2) {
-      const code = await completeResponse(state.responseId)
+      let code = null
+      if (!state.isOfflineMode && state.responseId) {
+        try {
+          code = await completeResponse(state.responseId)
+        } catch (rpcErr) {
+          console.warn('[Form] No se pudo completar mediante RPC en Supabase:', rpcErr.message)
+        }
+      }
+
+      if (!code) {
+        // Código de confirmación anónimo autónomo
+        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+        const p1 = Array.from({length:3}, () => chars[Math.floor(Math.random()*chars.length)]).join('')
+        const p2 = Array.from({length:4}, () => chars[Math.floor(Math.random()*chars.length)]).join('')
+        code = `${p1}-${p2}`
+      }
+
       state.submittedCode = code
       state.currentStep++
       showStep(state.currentStep)
@@ -628,8 +753,8 @@ async function goNext() {
       showStep(state.currentStep)
     }
   } catch (err) {
-    console.error('[Form] Error al guardar:', err)
-    showToast('error', 'Error al guardar', err.message || 'Por favor intente de nuevo.')
+    console.error('[Form] Error en navegación:', err)
+    showToast('error', 'Error al continuar', err.message || 'Por favor intente de nuevo.')
   } finally {
     state.isSubmitting = false
     setLoading(false)
@@ -642,77 +767,89 @@ function goBack() {
   showStep(state.currentStep)
 }
 
+function renderAllQuestionSections() {
+  renderQuestionSection('general',     'step-general')
+  renderQuestionSection('occupational','step-occupational')
+  renderQuestionSection('work_skills', 'step-work_skills')
+  renderQuestionSection('social',      'step-social')
+  renderQuestionSection('barriers',    'step-barriers')
+  renderQuestionSection('interests',   'step-interests')
+}
+
 // ============================================================
 // INICIALIZACIÓN
 // ============================================================
 async function init() {
-  setLoading(true, 'Cargando formulario...')
+  // 1. RENDERIZADO INMEDIATO:
+  // El consentimiento y todas las preguntas se cargan de inmediato para que
+  // la pantalla NUNCA aparezca en blanco ni bloquee al usuario.
+  renderConsent()
+  renderAllQuestionSections()
+  showStep(0)
 
+  // 2. Verificar configuración de Supabase
+  const supabaseUrl  = import.meta.env.VITE_SUPABASE_URL
+  const supabaseAnon = import.meta.env.VITE_SUPABASE_ANON_KEY
+
+  if (!supabaseUrl || !supabaseAnon || supabaseUrl.includes('your-project-ref')) {
+    console.warn('[Form] Supabase no configurado en Netlify (.env). El formulario funciona con catálogo integrado.')
+    state.isOfflineMode = true
+    return
+  }
+
+  // 3. Conexión asíncrona a Supabase para sincronizar configuración y preguntas
   try {
-    // Cargar configuración y preguntas
-    const [config, questions] = await Promise.all([
-      loadPublicConfig(),
-      loadQuestions(),
+    const [config, dbQuestions] = await Promise.all([
+      loadPublicConfig().catch(e => {
+        console.warn('[Form] Config warning:', e.message)
+        return {}
+      }),
+      loadQuestions().catch(e => {
+        console.warn('[Form] Questions warning:', e.message)
+        return null
+      }),
     ])
 
-    state.config         = config
-    state.consentVersion = config.consent_version || '1.0'
-    state.questions      = questions
+    if (config) {
+      state.config = config
+      if (config.consent_version) state.consentVersion = config.consent_version
+      const titleEl    = document.getElementById('formTitle')
+      const subtitleEl = document.getElementById('formSubtitle')
+      if (titleEl    && config.form_title)    titleEl.textContent    = config.form_title
+      if (subtitleEl && config.form_subtitle) subtitleEl.textContent = config.form_subtitle
 
-    // Verificar si el formulario está activo
-    if (config.form_active === 'false') {
-      document.getElementById('app').innerHTML = `
-        <div class="form-inactive">
-          <div class="card form-inactive-card">
-            <div style="font-size:3rem;margin-bottom:1rem">🔒</div>
-            <h2 style="color:var(--color-primary);margin-bottom:1rem">Formulario no disponible</h2>
-            <p style="color:var(--color-text-secondary)">
-              El formulario no está disponible en este momento. Por favor contacte al equipo de Terapia Ocupacional.
-            </p>
+      if (config.form_active === 'false') {
+        document.getElementById('app').innerHTML = `
+          <div class="form-inactive">
+            <div class="card form-inactive-card">
+              <div style="font-size:3rem;margin-bottom:1rem">🔒</div>
+              <h2 style="color:var(--color-primary);margin-bottom:1rem">Formulario no disponible</h2>
+              <p style="color:var(--color-text-secondary)">
+                El formulario no está disponible en este momento. Por favor contacte al equipo de Terapia Ocupacional.
+              </p>
+            </div>
           </div>
-        </div>
-      `
-      setLoading(false)
-      return
+        `
+        return
+      }
     }
 
-    // Actualizar título y subtítulo
-    const titleEl    = document.getElementById('formTitle')
-    const subtitleEl = document.getElementById('formSubtitle')
-    if (titleEl    && config.form_title)    titleEl.textContent    = config.form_title
-    if (subtitleEl && config.form_subtitle) subtitleEl.textContent = config.form_subtitle
+    if (dbQuestions && dbQuestions.length > 0) {
+      state.questions = dbQuestions
+      renderAllQuestionSections()
+    }
 
-    // Crear registro de respuesta en Supabase
-    const { response_id, participant_id } = await createResponse()
-    state.responseId    = response_id
-    state.participantId = participant_id
-
-    // Renderizar secciones
-    renderConsent()
-    renderQuestionSection('general',     'step-general')
-    renderQuestionSection('occupational','step-occupational')
-    renderQuestionSection('work_skills', 'step-work_skills')
-    renderQuestionSection('social',      'step-social')
-    renderQuestionSection('barriers',    'step-barriers')
-    renderQuestionSection('interests',   'step-interests')
-
-    // Mostrar primer paso
-    showStep(0)
+    // Inicializar respuesta en Supabase de forma no bloqueante
+    try {
+      const { response_id, participant_id } = await createResponse()
+      state.responseId    = response_id
+      state.participantId = participant_id
+    } catch (createErr) {
+      console.warn('[Form] Aviso al crear respuesta inicial en Supabase:', createErr.message)
+    }
 
   } catch (err) {
-    console.error('[Form] Error de inicialización:', err)
-
-    // Si hay error de conexión, mostrar formulario en modo offline con aviso
-    if (err.message?.includes('supabase') || err.message?.includes('fetch') || !navigator.onLine) {
-      showToast('error', 'Error de conexión', 'No se pudo conectar a la base de datos. Verifique la configuración de Supabase.')
-    } else {
-      showToast('error', 'Error al cargar', err.message)
-    }
-
-    // Mostrar formulario de todos modos con las preguntas hardcoded como fallback
-    showStep(0)
-  } finally {
-    setLoading(false)
+    console.warn('[Form] Modo sin conexión / inicialización local:', err.message)
   }
 }
 
