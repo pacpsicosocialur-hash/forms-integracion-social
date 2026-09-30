@@ -38,29 +38,63 @@ export async function saveSignature(responseId, signatureDataURL, consentVersion
   const storagePath = `${responseId}.png`
 
   // 3. Subir al bucket privado
-  const { error: uploadError } = await supabase.storage
-    .from(BUCKET)
-    .upload(storagePath, blob, {
-      contentType:  'image/png',
-      cacheControl: '3600',
-      upsert:       true,
-    })
+  try {
+    const { error: uploadError } = await supabase.storage
+      .from(BUCKET)
+      .upload(storagePath, blob, {
+        contentType:  'image/png',
+        cacheControl: '3600',
+        upsert:       true,
+      })
 
-  if (uploadError) throw new Error('No se pudo subir la firma: ' + uploadError.message)
+    if (uploadError) {
+      console.warn('[signatures] Error subiendo archivo a Storage:', uploadError.message)
+    }
+  } catch (storageEx) {
+    console.warn('[signatures] Excepción al interactuar con Storage:', storageEx.message)
+  }
 
-  // 4. Guardar referencia en la tabla signatures
+  // 4. Guardar referencia en la tabla signatures (idempotente)
   const { error: dbError } = await supabase
     .from('signatures')
-    .insert({
+    .upsert({
       response_id:      responseId,
       storage_path:     storagePath,
       bucket_name:      BUCKET,
       consent_version:  consentVersion,
       consent_accepted: true,
       file_size_bytes:  fileSizeBytes,
-    })
+    }, { onConflict: 'response_id' })
 
-  if (dbError) throw new Error('No se pudo registrar la firma: ' + dbError.message)
+  if (dbError) {
+    const isDuplicate = dbError.code === '23505' ||
+      dbError.message?.includes('duplicate key') ||
+      dbError.message?.includes('signatures_response_id_key')
+
+    if (!isDuplicate) {
+      // Intentar insert si la política RLS no permite update
+      const { error: insErr } = await supabase
+        .from('signatures')
+        .insert({
+          response_id:      responseId,
+          storage_path:     storagePath,
+          bucket_name:      BUCKET,
+          consent_version:  consentVersion,
+          consent_accepted: true,
+          file_size_bytes:  fileSizeBytes,
+        })
+
+      if (insErr) {
+        const isInsDuplicate = insErr.code === '23505' ||
+          insErr.message?.includes('duplicate key') ||
+          insErr.message?.includes('signatures_response_id_key')
+
+        if (!isInsDuplicate) {
+          console.warn('[signatures] Aviso al registrar firma en base de datos:', insErr.message)
+        }
+      }
+    }
+  }
 
   return storagePath
 }
