@@ -720,6 +720,8 @@ async function goNext() {
   if (!isValid) return
 
   state.isSubmitting = true
+  const btnNext = document.getElementById('btnNext')
+  if (btnNext) btnNext.disabled = true
   setLoading(true, state.currentStep === STEPS.length - 2 ? 'Enviando sus respuestas...' : 'Guardando...')
 
   try {
@@ -757,6 +759,7 @@ async function goNext() {
     showToast('error', 'Error al continuar', err.message || 'Por favor intente de nuevo.')
   } finally {
     state.isSubmitting = false
+    if (btnNext) btnNext.disabled = false
     setLoading(false)
   }
 }
