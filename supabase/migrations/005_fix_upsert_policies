@@ -1,0 +1,26 @@
+-- ============================================================
+-- MIGRACIÓN 005: POLÍTICAS RLS PARA UPDATE / UPSERT (ANON)
+-- Permite que operaciones idempotentes (upsert) y corrección de
+-- respuestas o reintentos de consentimiento no fallen por RLS.
+-- ============================================================
+
+-- 1. Permitir UPDATE en consents para el rol anónimo (idempotencia)
+DROP POLICY IF EXISTS "consents_anon_update" ON consents;
+CREATE POLICY "consents_anon_update" ON consents
+    FOR UPDATE TO anon
+    USING (TRUE)
+    WITH CHECK (TRUE);
+
+-- 2. Permitir UPDATE en signatures para el rol anónimo (reintentos)
+DROP POLICY IF EXISTS "signatures_anon_update" ON signatures;
+CREATE POLICY "signatures_anon_update" ON signatures
+    FOR UPDATE TO anon
+    USING (TRUE)
+    WITH CHECK (TRUE);
+
+-- 3. Permitir UPDATE en answers para el rol anónimo (edición / navegación atrás)
+DROP POLICY IF EXISTS "answers_anon_update" ON answers;
+CREATE POLICY "answers_anon_update" ON answers
+    FOR UPDATE TO anon
+    USING (TRUE)
+    WITH CHECK (TRUE);
