@@ -302,7 +302,25 @@ function renderCurrentView() {
     export:       renderExport,
     settings:     renderSettings,
   }
-  views[state.currentView]?.()
+  try {
+    views[state.currentView]?.()
+  } catch (err) {
+    console.error(`[Dashboard] Error renderizando vista ${state.currentView}:`, err)
+    const content = document.getElementById('adminContent')
+    if (content) {
+      content.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-icon">⚠️</div>
+          <h2 class="empty-title">Error al cargar esta sección</h2>
+          <p class="empty-text">${err.message || 'Ocurrió un error inesperado al procesar los datos.'}</p>
+          <button class="btn btn-secondary btn-sm" id="btnRetryView" style="margin-top:1rem">🔄 Reintentar</button>
+        </div>
+      `
+      document.getElementById('btnRetryView')?.addEventListener('click', () => {
+        loadAllData().then(() => renderCurrentView())
+      })
+    }
+  }
 }
 
 // ============================================================
@@ -665,9 +683,14 @@ function getAnswerDistribution(questionCode, questions) {
   const vals = state.answers.filter(a => a.question_code === questionCode).map(a => a.value)
   const freq = frequencyTable(vals)
 
-  if (q?.options) {
-    const labels = q.options.map(o => o.label)
-    const counts = q.options.map(o => (freq[String(o.value)]?.count || 0))
+  let opts = q?.options
+  if (typeof opts === 'string') {
+    try { opts = JSON.parse(opts) } catch (_) { opts = null }
+  }
+
+  if (Array.isArray(opts)) {
+    const labels = opts.map(o => o.label)
+    const counts = opts.map(o => (freq[String(o.value)]?.count || 0))
     return { labels, counts, total: vals.length }
   }
 
@@ -681,7 +704,6 @@ function getAnswerDistribution(questionCode, questions) {
 // ============================================================
 function renderParticipants() {
   const content = document.getElementById('adminContent')
-  const completed = state.responses.filter(r => r.status === 'completed')
 
   content.innerHTML = `
     <div class="filters-bar">
@@ -707,6 +729,7 @@ function renderParticipants() {
             <th scope="col">Completado</th>
             <th scope="col">Consentimiento</th>
             <th scope="col">Respuestas</th>
+            <th scope="col" style="text-align:center">Acciones</th>
           </tr>
         </thead>
         <tbody id="participantsTableBody">
@@ -715,6 +738,8 @@ function renderParticipants() {
       </table>
     </div>
   `
+
+  attachDeleteRowListeners()
 
   // Filtros
   const filterFn = () => {
@@ -726,17 +751,47 @@ function renderParticipants() {
       return statusOk && codeOk
     })
     document.getElementById('participantsTableBody').innerHTML = renderParticipantRows(filtered)
+    attachDeleteRowListeners()
   }
 
   document.getElementById('filterStatus').addEventListener('change', filterFn)
   document.getElementById('filterCode').addEventListener('input',  filterFn)
 }
 
+function attachDeleteRowListeners() {
+  document.querySelectorAll('.btn-delete-row').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation()
+      const id   = btn.dataset.id
+      const code = btn.dataset.code || 'sin código'
+      if (!confirm(`¿Desea eliminar la respuesta "${code}"?\nEsta acción borrará todas sus respuestas y datos asociados de forma permanente.`)) {
+        return
+      }
+
+      btn.disabled = true
+      btn.textContent = '⏳'
+      try {
+        const { error } = await supabase.from('responses').delete().eq('id', id)
+        if (error) throw error
+
+        await logAction('delete_response', { id, code })
+        showToast('success', 'Registro eliminado', `Se eliminó la respuesta ${code}.`)
+        await loadAllData()
+        renderCurrentView()
+      } catch (err) {
+        showToast('error', 'Error al eliminar', err.message)
+        btn.disabled = false
+        btn.textContent = '🗑️'
+      }
+    })
+  })
+}
+
 function renderParticipantRows(rows) {
-  if (rows.length === 0) return `<tr><td colspan="6" style="text-align:center;color:var(--color-text-muted);padding:2rem">Sin registros</td></tr>`
+  if (rows.length === 0) return `<tr><td colspan="7" style="text-align:center;color:var(--color-text-muted);padding:2rem">Sin registros</td></tr>`
 
   return rows.map(r => {
-    const consent = r.consents?.[0]
+    const consent = Array.isArray(r.consents) ? r.consents[0] : (r.consents || null)
     const statusBadge = {
       completed:   '<span class="badge badge-success">Completado</span>',
       in_progress: '<span class="badge badge-warning">En progreso</span>',
@@ -744,13 +799,24 @@ function renderParticipantRows(rows) {
       abandoned:   '<span class="badge badge-error">Abandonado</span>',
     }[r.status] || r.status
 
+    const answersCount = state.answers?.filter(a => a.response_id === r.id).length || 0
+
     return `<tr>
       <td><code style="font-size:0.85rem;font-weight:700;color:var(--color-primary)">${r.response_code || '—'}</code></td>
       <td>${statusBadge}</td>
       <td>${formatDateTime(r.started_at)}</td>
       <td>${formatDateTime(r.completed_at)}</td>
       <td>${consent?.accepted ? '<span style="color:var(--color-success)">✅ Aceptado</span>' : '<span style="color:var(--color-text-muted)">—</span>'}</td>
-      <td style="text-align:center">${r.answer_count ?? '—'}</td>
+      <td style="text-align:center">${answersCount > 0 ? answersCount : (r.answer_count ?? '—')}</td>
+      <td style="text-align:center">
+        <button class="btn btn-secondary btn-sm btn-delete-row"
+                data-id="${r.id}"
+                data-code="${r.response_code || 'sin código'}"
+                title="Eliminar respuesta"
+                style="padding:0.25rem 0.5rem;font-size:0.85rem;color:var(--color-error);border-color:rgba(239,68,68,0.3)">
+          🗑️
+        </button>
+      </td>
     </tr>`
   }).join('')
 }
@@ -951,6 +1017,16 @@ function renderSettings() {
         </div>
       </div>
 
+      <div class="config-group" style="border: 1px solid rgba(239, 68, 68, 0.3); background: rgba(239, 68, 68, 0.03)">
+        <h3 class="config-group-title" style="color:var(--color-error)">⚠️ Zona de peligro — Datos de prueba</h3>
+        <p style="font-size:0.875rem;color:var(--color-text-secondary);margin-bottom:1rem">
+          Si ha realizado pruebas de llenado del formulario y necesita vaciar todas las respuestas recolectadas para comenzar una recolección limpia, puede reiniciar los datos aquí.
+        </p>
+        <button class="btn btn-secondary btn-sm" id="btnResetAllResponses" style="color:var(--color-error);border-color:var(--color-error)">
+          🗑️ Reiniciar / Vaciar todas las respuestas
+        </button>
+      </div>
+
       <div class="config-group">
         <h3 class="config-group-title">📋 Auditoría</h3>
         <div id="auditLogSettings">
@@ -990,58 +1066,127 @@ function renderSettings() {
       showToast('success', 'Estado guardado', `Formulario ${active === 'true' ? 'activado' : 'desactivado'}.`)
     } catch (err) { showToast('error', 'Error', err.message) }
   })
+
+  // Reiniciar respuestas de prueba
+  document.getElementById('btnResetAllResponses')?.addEventListener('click', async () => {
+    const confirmText = prompt(
+      '⚠️ ADVERTENCIA: Esta acción eliminará permanentemente TODAS las respuestas, consentimientos y firmas registradas.\n\nPara confirmar, escriba BORRAR en el campo:'
+    )
+    if (confirmText !== 'BORRAR') {
+      if (confirmText !== null) showToast('warning', 'Cancelado', 'La confirmación no fue válida.')
+      return
+    }
+
+    const btn = document.getElementById('btnResetAllResponses')
+    btn.disabled = true
+    btn.textContent = 'Borrando respuestas...'
+
+    try {
+      const { error: rErr } = await supabase
+        .from('responses')
+        .delete()
+        .neq('id', '00000000-0000-0000-0000-000000000000')
+      if (rErr) throw rErr
+
+      try {
+        await supabase
+          .from('participants')
+          .delete()
+          .neq('id', '00000000-0000-0000-0000-000000000000')
+      } catch (_) {}
+
+      await logAction('reset_all_responses')
+      showToast('success', 'Respuestas reiniciadas', 'Se han borrado todas las respuestas de prueba.')
+      await loadAllData()
+      renderCurrentView()
+    } catch (err) {
+      showToast('error', 'Error al reiniciar', err.message)
+      btn.disabled = false
+      btn.textContent = '🗑️ Reiniciar / Vaciar todas las respuestas'
+    }
+  })
 }
 
 // ============================================================
 // INICIALIZACIÓN
 // ============================================================
+let isInitializing = false
+let isInitialized  = false
+
 async function init() {
-  // Verificar sesión existente
-  const session = await getSession()
+  if (isInitializing || isInitialized) return
+  isInitializing = true
 
-  if (!session) {
-    renderLogin()
-    return
-  }
+  try {
+    // Verificar sesión existente
+    const session = await getSession()
 
-  // Verificar rol de admin
-  const admin = await isAdmin()
-  if (!admin) {
+    if (!session) {
+      renderLogin()
+      isInitializing = false
+      return
+    }
+
+    // Verificar rol de admin
+    const admin = await isAdmin()
+    if (!admin) {
+      document.getElementById('app').innerHTML = `
+        <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:1rem;padding:2rem;text-align:center">
+          <div style="font-size:3rem">🔒</div>
+          <h2 style="color:var(--color-error)">Acceso no autorizado</h2>
+          <p style="color:var(--color-text-muted)">Su cuenta no tiene permisos de administrador.</p>
+          <button class="btn btn-primary" id="btnUnauthSignOut">Cerrar sesión</button>
+        </div>
+      `
+      document.getElementById('btnUnauthSignOut')?.addEventListener('click', async () => {
+        await signOut()
+        window.location.reload()
+      })
+      isInitializing = false
+      return
+    }
+
+    // Registrar login
+    await logAction('login')
+
+    // Renderizar shell
+    renderDashboardShell(session.user.email)
+
+    // Cargar datos y renderizar vista inicial
+    await loadAllData()
+    renderCurrentView()
+    isInitialized = true
+  } catch (err) {
+    console.error('[Dashboard] Error al inicializar panel:', err)
     document.getElementById('app').innerHTML = `
       <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:1rem;padding:2rem;text-align:center">
-        <div style="font-size:3rem">🔒</div>
-        <h2 style="color:var(--color-error)">Acceso no autorizado</h2>
-        <p style="color:var(--color-text-muted)">Su cuenta no tiene permisos de administrador.</p>
-        <button class="btn btn-primary" onclick="signOut().then(() => window.location.reload())">Cerrar sesión</button>
+        <div style="font-size:3rem">⚠️</div>
+        <h2 style="color:var(--color-error)">Error al cargar el panel</h2>
+        <p style="color:var(--color-text-muted);max-width:500px">${err.message || 'No se pudieron cargar los datos del sistema.'}</p>
+        <button class="btn btn-primary" onclick="window.location.reload()">Reintentar</button>
       </div>
     `
-    return
+  } finally {
+    isInitializing = false
   }
-
-  // Registrar login
-  await logAction('login')
-
-  // Renderizar shell
-  renderDashboardShell(session.user.email)
-
-  // Cargar datos y renderizar vista inicial
-  await loadAllData()
-  renderCurrentView()
 }
 
 // Auth state change listener
 onAuthChange(async (event, session) => {
   if (event === 'SIGNED_IN' && session) {
-    const admin = await isAdmin()
-    if (admin) {
-      renderDashboardShell(session.user.email)
-      await loadAllData()
-      renderCurrentView()
+    if (!isInitialized) {
+      await init()
     }
   } else if (event === 'SIGNED_OUT') {
+    isInitialized = false
     unsubscribeFromResponses()
     renderLogin()
   }
 })
 
-document.addEventListener('DOMContentLoaded', init)
+// Ejecutar de inmediato si el DOM ya está listo (evita pantalla en blanco cuando DOMContentLoaded ya disparó)
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', init)
+} else {
+  init()
+}
