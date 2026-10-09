@@ -47,8 +47,17 @@ const DEFAULT_PLUGINS = {
 const chartInstances = {}
 
 function destroyChart(id) {
+  try {
+    const existing = Chart.getChart(id)
+    if (existing) {
+      existing.destroy()
+    }
+  } catch (_) {}
+
   if (chartInstances[id]) {
-    chartInstances[id].destroy()
+    try {
+      chartInstances[id].destroy()
+    } catch (_) {}
     delete chartInstances[id]
   }
 }
