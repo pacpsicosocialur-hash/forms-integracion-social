@@ -89,9 +89,14 @@ export function categoricalStats(answers, questionCode, options = null) {
   const freq   = frequencyTable(values)
 
   // Mapear labels si se proveen opciones
+  let opts = options
+  if (typeof opts === 'string') {
+    try { opts = JSON.parse(opts) } catch (_) { opts = null }
+  }
+
   const result = {}
-  if (options) {
-    for (const opt of options) {
+  if (Array.isArray(opts)) {
+    for (const opt of opts) {
       const key = String(opt.value)
       result[opt.label] = freq[key] || { count: 0, percent: 0 }
     }
