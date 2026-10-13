@@ -743,6 +743,7 @@ function renderParticipants() {
 
   attachDeleteRowListeners()
   attachSignatureModalListeners()
+  attachIndividualModalListeners()
 
   // Filtros
   const filterFn = () => {
@@ -756,6 +757,7 @@ function renderParticipants() {
     document.getElementById('participantsTableBody').innerHTML = renderParticipantRows(filtered)
     attachDeleteRowListeners()
     attachSignatureModalListeners()
+    attachIndividualModalListeners()
   }
 
   document.getElementById('filterStatus').addEventListener('change', filterFn)
@@ -801,6 +803,236 @@ function attachSignatureModalListeners() {
       await openSignatureModal(path, code, date)
     })
   })
+}
+
+function attachIndividualModalListeners() {
+  document.querySelectorAll('.btn-view-individual').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation()
+      const id = btn.dataset.id
+      const code = btn.dataset.code
+      await openIndividualAnswersModal(id, code)
+    })
+  })
+}
+
+async function openIndividualAnswersModal(responseId, code) {
+  document.getElementById('individualModalOverlay')?.remove()
+
+  const resp = state.responses.find(r => r.id === responseId)
+  const consent = Array.isArray(resp?.consents) ? resp.consents[0] : (resp?.consents || null)
+  const sigObj = Array.isArray(resp?.signatures) ? resp.signatures[0] : (resp?.signatures || null)
+
+  const overlay = document.createElement('div')
+  overlay.className = 'modal-overlay'
+  overlay.id = 'individualModalOverlay'
+  overlay.innerHTML = `
+    <div class="modal-dialog modal-dialog-lg" role="dialog" aria-modal="true" aria-labelledby="indModalTitle">
+      <div class="modal-header">
+        <div>
+          <h3 class="modal-title" id="indModalTitle">📋 Ficha Individual de Respuestas</h3>
+          <p class="modal-subtitle">Participante: <strong>${code}</strong> &bull; ${formatDateTime(resp?.completed_at || resp?.started_at)}</p>
+        </div>
+        <button class="modal-close-btn" id="btnCloseIndModal" aria-label="Cerrar">&times;</button>
+      </div>
+      <div class="modal-body modal-body-scroll" id="indModalContent">
+        <div style="text-align:center;padding:3rem 1rem">
+          <div class="spinner" style="margin:0 auto 1rem"></div>
+          <p style="color:var(--color-text-muted);font-size:0.9rem">Cargando respuestas del participante...</p>
+        </div>
+      </div>
+    </div>
+  `
+  document.body.appendChild(overlay)
+
+  const closeModal = () => overlay.remove()
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closeModal()
+  })
+  document.getElementById('btnCloseIndModal')?.addEventListener('click', closeModal)
+
+  // Cargar respuestas completas de Supabase
+  let answers = state.answers?.filter(a => a.response_id === responseId) || []
+  try {
+    const { data: dbAns, error } = await supabase.from('answers').select('*').eq('response_id', responseId)
+    if (!error && dbAns && dbAns.length > 0) {
+      answers = dbAns
+    }
+  } catch (err) {
+    console.warn('[Dashboard] Error cargando respuestas frescas:', err.message)
+  }
+
+  // Obtener preguntas
+  let questions = state.questions && state.questions.length > 0 ? state.questions : []
+  if (questions.length === 0) {
+    try {
+      const { FALLBACK_QUESTIONS } = await import('../../data/fallbackQuestions.js')
+      questions = FALLBACK_QUESTIONS
+    } catch (_) {}
+  }
+
+  // Obtener firma si existe
+  let signatureUrl = ''
+  if (sigObj?.storage_path) {
+    try {
+      signatureUrl = await getSignatureSignedUrl(sigObj.storage_path, 3600)
+    } catch (_) {
+      const { data } = supabase.storage.from('signatures').getPublicUrl(sigObj.storage_path)
+      signatureUrl = data?.publicUrl || ''
+    }
+  }
+
+  const sectionsDef = [
+    { code: 'general',      title: '📋 Sección 1 — Datos Generales' },
+    { code: 'occupational', title: '⚙️ Sección 2 — Desempeño Ocupacional' },
+    { code: 'work_skills',  title: '💼 Sección 3 — Habilidades Laborales Básicas' },
+    { code: 'social',       title: '🤝 Sección 4 — Habilidades de Interacción Social' },
+    { code: 'barriers',     title: '🚧 Sección 5 — Barreras y Apoyos' },
+    { code: 'interests',    title: '⭐ Sección 6 — Intereses Ocupacionales y Laborales' },
+  ]
+
+  const totalAnswered = answers.length
+
+  const contentEl = document.getElementById('indModalContent')
+  if (!contentEl) return
+
+  let sectionsHtml = ''
+  for (const sec of sectionsDef) {
+    const secQuestions = questions.filter(q => q.section_code === sec.code)
+    if (secQuestions.length === 0) continue
+
+    let rowsHtml = ''
+    secQuestions.forEach(q => {
+      const ans = answers.find(a => a.question_code === q.question_code)
+      let displayValue = ''
+
+      if (ans && ans.value !== null && ans.value !== undefined && ans.value !== '') {
+        let opts = q.options
+        if (typeof opts === 'string') {
+          try { opts = JSON.parse(opts) } catch (_) { opts = null }
+        }
+
+        const foundOpt = Array.isArray(opts) ? opts.find(o => String(o.value) === String(ans.value)) : null
+        const labelText = foundOpt ? foundOpt.label : ans.value
+
+        if (ans.value_numeric !== null && ans.value_numeric !== undefined && !isNaN(Number(ans.value_numeric))) {
+          displayValue = `<span class="badge-ans-likert">
+            <span>★ <strong>${ans.value_numeric}</strong></span> &bull; ${labelText}
+          </span>`
+        } else {
+          displayValue = `<span class="badge-ans-value">${labelText}</span>`
+        }
+      } else {
+        displayValue = `<span class="badge-ans-empty">(Sin respuesta)</span>`
+      }
+
+      rowsHtml += `
+        <div class="individual-question-row" data-qtext="${q.question_text.toLowerCase()} ${displayValue.toLowerCase()}">
+          <div class="individual-question-title">
+            <span class="individual-question-text">${q.question_text}</span>
+            <span class="individual-question-code">${q.question_code}</span>
+          </div>
+          <div class="individual-answer-box">
+            ${displayValue}
+          </div>
+        </div>
+      `
+    })
+
+    sectionsHtml += `
+      <div class="individual-section-block" data-section="${sec.code}">
+        <div class="individual-section-header">
+          <span>${sec.title}</span>
+          <span style="font-size:0.75rem;opacity:0.8">${secQuestions.length} preguntas</span>
+        </div>
+        <div class="individual-question-list">
+          ${rowsHtml}
+        </div>
+      </div>
+    `
+  }
+
+  contentEl.innerHTML = `
+    <!-- Barra de resumen -->
+    <div class="participant-summary-bar">
+      <div class="summary-stat-chip">
+        <div class="summary-stat-label">Código</div>
+        <div class="summary-stat-val" style="color:var(--color-primary)">${code}</div>
+      </div>
+      <div class="summary-stat-chip">
+        <div class="summary-stat-label">Estado</div>
+        <div class="summary-stat-val">${resp?.status === 'completed' ? '✅ Completado' : resp?.status || '—'}</div>
+      </div>
+      <div class="summary-stat-chip">
+        <div class="summary-stat-label">Respuestas</div>
+        <div class="summary-stat-val">${totalAnswered} registradas</div>
+      </div>
+      <div class="summary-stat-chip">
+        <div class="summary-stat-label">Consentimiento</div>
+        <div class="summary-stat-val">${consent?.accepted ? '✅ Aceptado y Firmado' : 'Pendiente'}</div>
+      </div>
+    </div>
+
+    <!-- Barra de acciones y filtro -->
+    <div class="individual-filters-bar">
+      <input type="text" class="individual-search-input" id="searchIndQuestion" placeholder="🔍 Buscar pregunta o respuesta en este formulario..." />
+      <button class="btn btn-secondary btn-sm" id="btnPrintIndModal" style="display:inline-flex;align-items:center;gap:0.35rem">
+        🖨️ Imprimir / Guardar PDF
+      </button>
+    </div>
+
+    <!-- Evidencia de Firma -->
+    ${signatureUrl ? `
+      <div class="individual-section-block">
+        <div class="individual-section-header">
+          <span>✍️ Evidencia de Firma Manuscrita</span>
+          <span style="font-size:0.75rem;opacity:0.8">Consentimiento informado</span>
+        </div>
+        <div class="individual-signature-preview">
+          <img src="${signatureUrl}" alt="Firma ${code}" />
+          <div>
+            <div style="font-size:0.85rem;font-weight:600;color:var(--color-text)">Firma electrónica manuscrita registrada</div>
+            <div style="font-size:0.75rem;color:var(--color-text-muted)">Fecha: ${formatDateTime(resp?.completed_at || resp?.started_at)}</div>
+          </div>
+        </div>
+      </div>
+    ` : ''}
+
+    <!-- Secciones y Preguntas -->
+    <div id="indQuestionsContainer">
+      ${sectionsHtml}
+    </div>
+  `
+
+  const footer = document.createElement('div')
+  footer.className = 'modal-footer'
+  footer.innerHTML = `
+    <button class="btn btn-secondary btn-sm" id="btnDismissIndModal">Cerrar</button>
+  `
+  overlay.querySelector('.modal-dialog')?.appendChild(footer)
+  document.getElementById('btnDismissIndModal')?.addEventListener('click', closeModal)
+
+  document.getElementById('btnPrintIndModal')?.addEventListener('click', () => {
+    window.print()
+  })
+
+  const searchInput = document.getElementById('searchIndQuestion')
+  if (searchInput) {
+    searchInput.addEventListener('input', (e) => {
+      const term = e.target.value.toLowerCase().trim()
+      document.querySelectorAll('.individual-question-row').forEach(row => {
+        const text = row.dataset.qtext || ''
+        const match = !term || text.includes(term)
+        row.style.display = match ? 'flex' : 'none'
+      })
+      document.querySelectorAll('.individual-section-block').forEach(block => {
+        const visibleRows = block.querySelectorAll('.individual-question-row:not([style*="display: none"])')
+        if (block.querySelector('.individual-question-row')) {
+          block.style.display = visibleRows.length === 0 ? 'none' : 'block'
+        }
+      })
+    })
+  }
 }
 
 async function openSignatureModal(storagePath, code, date) {
@@ -939,13 +1171,22 @@ function renderParticipantRows(rows) {
       </td>
       <td style="text-align:center">${answersCount > 0 ? answersCount : (r.answer_count ?? '—')}</td>
       <td style="text-align:center">
-        <button class="btn btn-secondary btn-sm btn-delete-row"
-                data-id="${r.id}"
-                data-code="${r.response_code || 'sin código'}"
-                title="Eliminar respuesta"
-                style="padding:0.25rem 0.5rem;font-size:0.85rem;color:var(--color-error);border-color:rgba(239,68,68,0.3)">
-          🗑️
-        </button>
+        <div style="display:inline-flex;align-items:center;gap:0.35rem">
+          <button class="btn btn-primary btn-sm btn-view-individual"
+                  data-id="${r.id}"
+                  data-code="${r.response_code || 'Participante'}"
+                  style="padding:0.25rem 0.6rem;font-size:0.8rem;gap:0.25rem;display:inline-flex;align-items:center"
+                  title="Ver respuestas individuales de este participante">
+            👁️ Ver respuestas
+          </button>
+          <button class="btn btn-secondary btn-sm btn-delete-row"
+                  data-id="${r.id}"
+                  data-code="${r.response_code || 'sin código'}"
+                  title="Eliminar respuesta"
+                  style="padding:0.25rem 0.5rem;font-size:0.85rem;color:var(--color-error);border-color:rgba(239,68,68,0.3)">
+            🗑️
+          </button>
+        </div>
       </td>
     </tr>`
   }).join('')
