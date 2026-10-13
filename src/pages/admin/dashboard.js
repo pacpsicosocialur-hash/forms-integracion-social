@@ -14,6 +14,7 @@ import {
   renderRadarChart, renderTimelineChart,
 } from '../../dashboard/charts.js'
 import { formatDateTime, formatPercent, formatNumber, exportFilename } from '../../utils/format.js'
+import { getSignatureSignedUrl } from '../../services/signatures.js'
 
 // ============================================================
 // ESTADO
@@ -728,6 +729,7 @@ function renderParticipants() {
             <th scope="col">Iniciado</th>
             <th scope="col">Completado</th>
             <th scope="col">Consentimiento</th>
+            <th scope="col">Firma</th>
             <th scope="col">Respuestas</th>
             <th scope="col" style="text-align:center">Acciones</th>
           </tr>
@@ -740,6 +742,7 @@ function renderParticipants() {
   `
 
   attachDeleteRowListeners()
+  attachSignatureModalListeners()
 
   // Filtros
   const filterFn = () => {
@@ -752,6 +755,7 @@ function renderParticipants() {
     })
     document.getElementById('participantsTableBody').innerHTML = renderParticipantRows(filtered)
     attachDeleteRowListeners()
+    attachSignatureModalListeners()
   }
 
   document.getElementById('filterStatus').addEventListener('change', filterFn)
@@ -787,11 +791,105 @@ function attachDeleteRowListeners() {
   })
 }
 
+function attachSignatureModalListeners() {
+  document.querySelectorAll('.btn-view-signature').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation()
+      const path = btn.dataset.path
+      const code = btn.dataset.code
+      const date = btn.dataset.date
+      await openSignatureModal(path, code, date)
+    })
+  })
+}
+
+async function openSignatureModal(storagePath, code, date) {
+  document.getElementById('signatureModalOverlay')?.remove()
+
+  const overlay = document.createElement('div')
+  overlay.className = 'modal-overlay'
+  overlay.id = 'signatureModalOverlay'
+  overlay.innerHTML = `
+    <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="sigModalTitle">
+      <div class="modal-header">
+        <div>
+          <h3 class="modal-title" id="sigModalTitle">✍️ Evidencia de Firma Manuscrita</h3>
+          <p class="modal-subtitle">Código: <strong>${code}</strong> &bull; ${date}</p>
+        </div>
+        <button class="modal-close-btn" id="btnCloseSigModal" aria-label="Cerrar modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-signature-box" id="sigModalBox">
+          <div class="spinner" style="margin:1rem auto"></div>
+          <p style="font-size:0.85rem;color:var(--color-text-muted)">Cargando firma digital...</p>
+        </div>
+        <div class="modal-signature-meta">
+          <div><strong>Ruta en Supabase Storage:</strong> <code>signatures/${storagePath}</code></div>
+          <div><strong>Estado:</strong> Consentimiento informado firmado electrónicamente</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <a id="btnDownloadSig" href="#" download="firma_${code}.png" class="btn btn-primary btn-sm" style="display:none;align-items:center;gap:0.4rem">
+          📥 Descargar evidencia PNG
+        </a>
+        <button class="btn btn-secondary btn-sm" id="btnDismissSigModal">Cerrar</button>
+      </div>
+    </div>
+  `
+
+  document.body.appendChild(overlay)
+
+  const closeModal = () => {
+    overlay.remove()
+  }
+
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closeModal()
+  })
+  document.getElementById('btnCloseSigModal')?.addEventListener('click', closeModal)
+  document.getElementById('btnDismissSigModal')?.addEventListener('click', closeModal)
+
+  try {
+    let url = ''
+    try {
+      url = await getSignatureSignedUrl(storagePath, 3600)
+    } catch (_) {
+      const { data } = supabase.storage.from('signatures').getPublicUrl(storagePath)
+      url = data?.publicUrl || ''
+    }
+
+    const box = document.getElementById('sigModalBox')
+    const dlBtn = document.getElementById('btnDownloadSig')
+
+    if (!url) {
+      if (box) box.innerHTML = `<p style="color:var(--color-error);font-size:0.9rem">No se pudo obtener la URL de la imagen.</p>`
+      return
+    }
+
+    if (box) {
+      box.innerHTML = `<img src="${url}" alt="Firma manuscrita del participante ${code}" class="modal-signature-img" />`
+    }
+    if (dlBtn) {
+      dlBtn.href = url
+      dlBtn.target = '_blank'
+      dlBtn.style.display = 'inline-flex'
+    }
+  } catch (err) {
+    const box = document.getElementById('sigModalBox')
+    if (box) {
+      box.innerHTML = `<p style="color:var(--color-error);font-size:0.9rem">Error al cargar la imagen: ${err.message}</p>`
+    }
+  }
+}
+
 function renderParticipantRows(rows) {
-  if (rows.length === 0) return `<tr><td colspan="7" style="text-align:center;color:var(--color-text-muted);padding:2rem">Sin registros</td></tr>`
+  if (rows.length === 0) return `<tr><td colspan="8" style="text-align:center;color:var(--color-text-muted);padding:2rem">Sin registros</td></tr>`
 
   return rows.map(r => {
     const consent = Array.isArray(r.consents) ? r.consents[0] : (r.consents || null)
+    const sigObj  = Array.isArray(r.signatures) ? r.signatures[0] : (r.signatures || null)
+    const hasSignature = Boolean(sigObj?.storage_path)
+
     const statusBadge = {
       completed:   '<span class="badge badge-success">Completado</span>',
       in_progress: '<span class="badge badge-warning">En progreso</span>',
@@ -807,6 +905,20 @@ function renderParticipantRows(rows) {
       <td>${formatDateTime(r.started_at)}</td>
       <td>${formatDateTime(r.completed_at)}</td>
       <td>${consent?.accepted ? '<span style="color:var(--color-success)">✅ Aceptado</span>' : '<span style="color:var(--color-text-muted)">—</span>'}</td>
+      <td>
+        ${hasSignature ? `
+          <button class="btn btn-secondary btn-sm btn-view-signature"
+                  data-path="${sigObj.storage_path}"
+                  data-code="${r.response_code || 'Participante'}"
+                  data-date="${formatDateTime(r.completed_at || r.started_at)}"
+                  style="padding:0.25rem 0.5rem;font-size:0.8rem;gap:0.3rem;display:inline-flex;align-items:center"
+                  title="Ver evidencia de firma">
+            ✍️ Ver firma
+          </button>
+        ` : `
+          <span style="color:var(--color-text-muted);font-size:0.8rem">Sin firma</span>
+        `}
+      </td>
       <td style="text-align:center">${answersCount > 0 ? answersCount : (r.answer_count ?? '—')}</td>
       <td style="text-align:center">
         <button class="btn btn-secondary btn-sm btn-delete-row"
