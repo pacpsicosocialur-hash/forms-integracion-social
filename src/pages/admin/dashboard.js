@@ -868,6 +868,24 @@ async function openSignatureModal(storagePath, code, date) {
 
     if (box) {
       box.innerHTML = `<img src="${url}" alt="Firma manuscrita del participante ${code}" class="modal-signature-img" />`
+      const img = box.querySelector('img')
+      if (img) {
+        img.onerror = () => {
+          box.innerHTML = `
+            <div style="text-align:center;padding:1.5rem 1rem">
+              <div style="font-size:2rem;margin-bottom:0.5rem">⚠️</div>
+              <p style="font-weight:600;font-size:0.95rem;color:var(--color-error);margin-bottom:0.5rem">
+                El archivo de la firma no se encuentra en Storage
+              </p>
+              <p style="font-size:0.8rem;color:var(--color-text-muted);line-height:1.4">
+                El bucket <code>signatures</code> no existía en Supabase cuando se envió este formulario.<br>
+                Crea el bucket en Supabase y las próximas firmas se guardarán correctamente.
+              </p>
+            </div>
+          `
+          if (dlBtn) dlBtn.style.display = 'none'
+        }
+      }
     }
     if (dlBtn) {
       dlBtn.href = url
