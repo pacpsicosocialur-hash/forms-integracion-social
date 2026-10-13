@@ -1,0 +1,36 @@
+-- ============================================================
+-- MIGRACIÓN 006: CORRECCIÓN DE POLÍTICAS DE SUPABASE STORAGE
+-- Permite subida (INSERT/UPDATE) y lectura (SELECT) de firmas
+-- ============================================================
+
+-- 1. Asegurar que el bucket signatures sea público
+UPDATE storage.buckets
+SET public = TRUE
+WHERE id = 'signatures';
+
+-- 2. Limpiar políticas previas restrictivas de storage para signatures
+DROP POLICY IF EXISTS "signatures_anon_upload"   ON storage.objects;
+DROP POLICY IF EXISTS "signatures_admin_select"  ON storage.objects;
+DROP POLICY IF EXISTS "signatures_admin_delete"  ON storage.objects;
+DROP POLICY IF EXISTS "signatures_public_select" ON storage.objects;
+DROP POLICY IF EXISTS "signatures_public_insert" ON storage.objects;
+DROP POLICY IF EXISTS "signatures_public_update" ON storage.objects;
+
+-- 3. Permitir ver/descargar firmas a todos (lectura pública)
+CREATE POLICY "signatures_public_select"
+ON storage.objects FOR SELECT
+TO public
+USING (bucket_id = 'signatures');
+
+-- 4. Permitir subir firmas desde el formulario (inserción pública)
+CREATE POLICY "signatures_public_insert"
+ON storage.objects FOR INSERT
+TO public
+WITH CHECK (bucket_id = 'signatures');
+
+-- 5. Permitir actualizar/sobrescribir firmas (requerido por upsert)
+CREATE POLICY "signatures_public_update"
+ON storage.objects FOR UPDATE
+TO public
+USING (bucket_id = 'signatures')
+WITH CHECK (bucket_id = 'signatures');
